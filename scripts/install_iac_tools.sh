@@ -4,135 +4,154 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
-# --- Перевірка запуску від імені root (через sudo) ---
-# --- Check if running as root (via sudo) ---
-if [ "$EUID" -ne 0 ]; then
-  echo "Error: Please run this script as root (using sudo)." >&2
-  exit 1
-fi
+# --- Початок блоку обробки помилок ---
+# --- Start of error handling block ---
+# (Залишається без змін / Remains unchanged)
+handle_error() {
+  local exit_code=$?
+  local line_num=$1
+  local command="${BASH_COMMAND}"
+  echo "------------------------------------------------------------" >&2
+  echo "[Main Script] ERROR: Script failed on line $line_num with exit code $exit_code." >&2
+  echo "[Main Script] Failing command segment: $command" >&2
+  echo "------------------------------------------------------------" >&2
+}
+trap 'handle_error $LINENO' ERR
+# --- Кінець блоку обробки помилок ---
+# --- End of error handling block ---
 
-echo "=== Starting IaC tools installation (Ansible, OpenTofu) ==="
+# === Функції / Functions ===
 
-# --- Крок 1: Оновлення списку пакетів ---
-# --- Step 1: Update apt package lists ---
-echo "--> Step 1: Updating apt package lists..."
-apt update
-
-# --- Крок 2: Встановлення необхідних залежностей ---
-# --- Step 2: Installing necessary dependencies ---
-echo "--> Step 2: Installing dependencies (wget, gpg, curl, lsb-release)..."
-apt install -y wget gpg curl lsb-release apt-transport-https ca-certificates gnupg
-
-# --- Крок 3: Визначення кодового імені ОС та PPA для Ansible ---
-# --- Step 3: Determine OS codename and PPA codename for Ansible ---
-echo "--> Step 3: Determining codename for Ansible PPA..."
-# Перевірка наявності lsb_release після встановлення
-# Verify lsb_release is available after installation
-if ! command -v lsb_release &> /dev/null; then
-    echo "Error: lsb_release command not found." >&2
+# Перевірка запуску від імені root
+# Check if running as root
+check_root() {
+  echo "--> Verifying root privileges..."
+  if [ "$EUID" -ne 0 ]; then
+    echo "Error: Please run this script as root (using sudo)." >&2
     exit 1
-fi
-# Отримуємо кодове ім'я ОС
-# Get OS codename
-OS_CODENAME=$(lsb_release -cs)
-# Отримуємо ID ОС в нижньому регістрі
-# Get OS ID in lowercase
-OS_ID=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+  fi
+  echo "Root privileges verified."
+}
 
-ANSIBLE_PPA_CODENAME=""
+# Оновлення пакетів та встановлення залежностей
+# Update packages and install dependencies
+prepare_system() {
+  echo "--> Step 1 & 2: Updating package list and installing dependencies..."
+  # Оновлення / Update
+  apt-get update
 
-echo "Detected OS: $OS_ID, Codename: $OS_CODENAME"
+  # Встановлення залежностей / Install dependencies
+  apt-get install -y wget gpg curl lsb-release apt-transport-https ca-certificates
+  echo "System preparation complete (update & dependencies installed)."
+}
 
-# Визначаємо кодове ім'я PPA для Ansible на основі ОС
-# Determine Ansible PPA codename based on OS
-if [ "$OS_ID" == "debian" ]; then
-  case "$OS_CODENAME" in
-    "bookworm") ANSIBLE_PPA_CODENAME="jammy" ;;  # Debian 12 -> Ubuntu 22.04
-    "bullseye") ANSIBLE_PPA_CODENAME="focal" ;;  # Debian 11 -> Ubuntu 20.04
-    "buster")   ANSIBLE_PPA_CODENAME="bionic" ;; # Debian 10 -> Ubuntu 18.04
-    *)
-      # Якщо версія Debian невідома, виводимо попередження і пробуємо використати її кодове ім'я
-      # If Debian version is unknown, print warning and try using its codename
-      echo "Warning: No direct mapping found for Debian '$OS_CODENAME' in Ansible PPA table." >&2
-      echo "Attempting to use '$OS_CODENAME' as PPA codename, but this might fail." >&2
-      ANSIBLE_PPA_CODENAME="$OS_CODENAME"
-      # Можна зробити exit 1, якщо потрібна сувора відповідність
-      # Can uncomment exit 1 if strict matching is required
-      # exit 1
-      ;;
-  esac
-elif [ "$OS_ID" == "ubuntu" ]; then
-  # Для Ubuntu використовуємо його власне кодове ім'я
-  # For Ubuntu, use its own codename
-  ANSIBLE_PPA_CODENAME="$OS_CODENAME"
-  # Тут можна додати перевірки на підтримувані версії Ubuntu, якщо потрібно
-  # Can add checks for supported Ubuntu versions here if needed
-else
-  # Якщо ОС не Debian і не Ubuntu, виходимо з помилкою
-  # If OS is not Debian or Ubuntu, exit with error
-  echo "Error: Could not determine supported distribution (Debian or Ubuntu required)." >&2
-  exit 1
-fi
+# Визначення кодового імені та встановлення Ansible
+# Determine codename and install Ansible
+install_ansible() {
+  local ansible_script="./install_ansible.sh" # Шлях до скрипта / Path to the script
+  local ansible_ppa_codename=""             # Локальна змінна для цієї функції / Local variable for this function
 
-# Переконуємося, що кодове ім'я PPA визначено
-# Ensure the PPA codename was determined
-if [ -z "$ANSIBLE_PPA_CODENAME" ]; then
-    echo "Error: Failed to determine PPA codename for Ansible." >&2
+  echo "--> Step 3 & 4: Determining codename and installing Ansible..."
+  # --- Визначення кодового імені PPA для Ansible ---
+  # --- Determine PPA codename for Ansible ---
+  echo "Determining OS details for Ansible PPA..."
+  if ! command -v lsb_release &> /dev/null; then
+      echo "Error: lsb_release command not found." >&2
+      exit 1
+  fi
+  local os_codename
+  local os_id
+  os_codename=$(lsb_release -cs)
+  os_id=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+
+  echo "Detected OS: $os_id, Codename: $os_codename"
+
+  if [ "$os_id" == "debian" ]; then
+    case "$os_codename" in
+      "bookworm") ansible_ppa_codename="jammy" ;;
+      "bullseye") ansible_ppa_codename="focal" ;;
+      "buster")   ansible_ppa_codename="bionic" ;;
+      *)
+        echo "Warning: No direct mapping found for Debian '$os_codename'. Using '$os_codename' itself." >&2
+        ansible_ppa_codename="$os_codename"
+        ;;
+    esac
+  elif [ "$os_id" == "ubuntu" ]; then
+    ansible_ppa_codename="$os_codename"
+  else
+    echo "Error: Could not determine supported distribution (Debian or Ubuntu required)." >&2
     exit 1
-fi
+  fi
 
-echo "Using PPA codename '$ANSIBLE_PPA_CODENAME' for Ansible."
+  if [ -z "$ansible_ppa_codename" ]; then
+      echo "Error: Failed to determine PPA codename for Ansible." >&2
+      exit 1
+  fi
+  echo "Using PPA codename '$ansible_ppa_codename' for Ansible."
 
-# --- Крок 4: Виклик скрипта встановлення Ansible ---
-# --- Step 4: Call Ansible installation script ---
-ANSIBLE_SCRIPT="./install_ansible.sh"
-echo "--> Step 4: Running Ansible installation ($ANSIBLE_SCRIPT)..."
-# Перевіряємо, чи існує файл скрипта
-# Check if the script file exists
-if [ -f "$ANSIBLE_SCRIPT" ]; then
-  # Надаємо права на виконання (про всяк випадок)
-  # Ensure execute permissions (just in case)
-  chmod +x "$ANSIBLE_SCRIPT"
-  # Викликаємо скрипт, передаючи кодове ім'я PPA
-  # Call the script, passing the PPA codename
-  "$ANSIBLE_SCRIPT" "$ANSIBLE_PPA_CODENAME"
-else
-  # Якщо скрипт не знайдено, виходимо з помилкою
-  # If script not found, exit with error
-  echo "Error: Script $ANSIBLE_SCRIPT not found!" >&2
-  exit 1
-fi
+  # --- Запуск встановлення Ansible ---
+  # --- Run Ansible installation ---
+  echo "Running Ansible installation script ($ansible_script)..."
+  if [ -f "$ansible_script" ]; then
+    chmod +x "$ansible_script"
+    # Викликаємо скрипт, передаючи визначене кодове ім'я
+    # Call the script, passing the determined codename
+    "$ansible_script" "$ansible_ppa_codename"
+  else
+    echo "Error: Script $ansible_script not found!" >&2
+    exit 1
+  fi
+  echo "Ansible installation step finished."
+}
 
-# --- Крок 5: Виклик скрипта встановлення OpenTofu ---
-# --- Step 5: Call OpenTofu installation script ---
-OPENTOFU_SCRIPT="./install_opentofu.sh"
-echo "--> Step 5: Running OpenTofu installation ($OPENTOFU_SCRIPT)..."
-# Перевіряємо, чи існує файл скрипта
-# Check if the script file exists
-if [ -f "$OPENTOFU_SCRIPT" ]; then
-  # Надаємо права на виконання
-  # Ensure execute permissions
-  chmod +x "$OPENTOFU_SCRIPT"
-  # Викликаємо скрипт
-  # Call the script
-  "$OPENTOFU_SCRIPT"
-else
-  # Якщо скрипт не знайдено, виходимо з помилкою
-  # If script not found, exit with error
-  echo "Error: Script $OPENTOFU_SCRIPT not found!" >&2
-  exit 1
-fi
+# Встановлення OpenTofu
+# Install OpenTofu
+install_opentofu() {
+  local opentofu_script="./install_opentofu.sh" # Шлях до скрипта / Path to the script
+  echo "--> Step 5: Running OpenTofu installation ($opentofu_script)..."
+  if [ -f "$opentofu_script" ]; then
+    chmod +x "$opentofu_script"
+    # Викликаємо скрипт OpenTofu
+    # Call the OpenTofu script
+    "$opentofu_script"
+  else
+    echo "Error: Script $opentofu_script not found!" >&2
+    exit 1
+  fi
+  echo "OpenTofu installation step finished."
+}
 
-# --- Завершення ---
-# --- Completion ---
-echo "=============================================================="
-echo "=== IaC tools installation finished!                       ==="
-echo "=============================================================="
-echo "Installed:"
-echo '''  - Dependencies (wget gpg curl lsb-release apt-transport-https
-                  ca-certificates gnupg)'''
-echo "  - Ansible (Verify with: ansible --version)"
-echo "  - OpenTofu (Verify with: tofu --version)"
-echo "=============================================================="
+# === Основна логіка / Main Logic ===
+main() {
+  echo "=== Starting IaC tools installation (Ansible, OpenTofu) ==="
 
+  # Виклик функцій покроково / Call functions step-by-step
+  check_root
+  prepare_system    # Включає update та install deps / Includes update and install deps
+  install_ansible   # Включає визначення кодового імені та запуск інсталятора / Includes codename detection and installer run
+  install_opentofu  # Встановлення OpenTofu / Installs OpenTofu
+
+  # --- Завершення ---
+  # --- Completion ---
+  echo "=============================================================="
+  echo "=== IaC tools installation finished successfully!          ==="
+  echo "=============================================================="
+  echo "Installed:"
+  echo '''  - Dependencies (wget, gpg, curl, lsb-release, 
+                   apt-transport-https, ca-certificates)'''
+  echo "  - Ansible (Verify with: ansible --version)"
+  echo "  - OpenTofu (Verify with: tofu --version)"
+  echo "=============================================================="
+
+  # Знімаємо trap перед нормальним виходом з функції main
+  # Remove the trap before normal exit from the main function
+  trap - ERR
+}
+
+# --- Запуск основної функції ---
+# --- Run the main function ---
+main
+
+# Вихід зі скрипта (код 0 за замовчуванням, якщо main завершилась успішно)
+# Exit the script (code 0 by default if main completed successfully)
 exit 0
