@@ -271,8 +271,8 @@ main() {
   echo "=============================================================="
   echo "Installed:"
   if [ "$DEV_TOOLS_ONLY" = false ]; then
-    echo '''  - Dependencies (wget, gpg, curl, lsb-release,
-                     apt-transport-https, ca-certificates)'''
+    echo "  - Dependencies (wget, gpg, curl, lsb-release,"
+    echo "                 apt-transport-https, ca-certificates)"
     echo "  - Ansible (Verify with: ansible --version)"
     echo "  - OpenTofu (Verify with: tofu --version)"
   fi
