@@ -1,79 +1,45 @@
 # infra-commons
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
 
 A collection of common, reusable scripts, configurations, Ansible roles, and OpenTofu modules for infrastructure setup and management. This repository aims to simplify repetitive tasks and promote consistency across projects.
-
-## Table of Contents
-
-- [Purpose](#purpose)
-- [Current Contents](#current-contents)
-  - [Scripts](#scripts)
-- [Usage](#usage)
-  - [Prerequisites](#prerequisites)
-  - [Running the Installation Scripts](#running-the-installation-scripts)
-- [Future Plans](#future-plans)
-- [Contributing](#contributing)
-- [License](#license)
 
 ## Purpose
 
 The main goal of `infra-commons` is to provide a central place for well-tested and reusable infrastructure components, reducing boilerplate and accelerating the setup of new environments or projects.
 
-## Current Contents
+## Contents
 
-Currently, this repository primarily contains utility scripts for setting up common Infrastructure as Code (IaC) tools.
+This repository currently includes:
 
-### Scripts
+* **Scripts (`scripts/`):** A collection of utility scripts for automating common infrastructure tasks, such as tool installation and virtual machine template creation.
+* **OpenTofu Modules (`opentofu/modules/`):** Reusable modules for defining infrastructure resources. *(Work in Progress/Placeholder)*
+* **Ansible Roles (`ansible/roles/`):** Reusable roles for configuration management. *(Work in Progress/Placeholder)*
 
-Located in the `scripts/` directory:
+## General Prerequisites
 
-- **`install_iac_tools.sh`**: The main script that orchestrates the installation of various tools. It likely calls other specific installation scripts.
-- **`install_ansible.sh`**: Script specifically for installing Ansible and its dependencies.
-- **`install_opentofu.sh`**: Script specifically for installing OpenTofu (or Terraform) and its dependencies.
+The specific prerequisites vary depending on the component (script, module, role) you intend to use. However, common requirements across the repository may include:
 
-*(Please update the descriptions above if the scripts function differently)*
+* **Shell:** A `bash` compatible shell for running shell scripts.
+* **Python:** Python 3.x for any Python-based scripts or tools.
+* **Ansible:** A working Ansible installation if you plan to use Ansible roles or playbooks.
+* **OpenTofu/Terraform:** An OpenTofu or Terraform installation for IaC modules.
+* **Standard Unix Utilities:** Tools like `curl`, `wget`, `gpg`, `git`, `jq`, etc., are often assumed to be available.
+
+Please refer to the specific documentation for each component in our **[GitHub Wiki](https://github.com/os4-dev/infra-commons/wiki)** for detailed prerequisites.
 
 ## Usage
 
-### Prerequisites
-
-- A `bash` compatible shell.
-- Standard Unix utilities (`curl` or `wget`, `gpg`, `lsb_release`, etc.).
-- Operating System: Currently tested/developed primarily on **Debian/Ubuntu-based** Linux distributions. (Please update if other OS are supported).
-- `sudo` privileges are required to install system packages.
-
-### Running the Installation Scripts
-
-1.  **Clone the repository (optional):**
-    ```bash
-    git clone [https://github.com/os4-dev/infra-commons.git](https://github.com/os4-dev/infra-commons.git)
-    cd infra-commons/scripts
-    ```
-
-2.  **Download a specific script (if you don't want to clone):**
-    ```bash
-    # Example using curl for the main script
-    curl -LO [https://raw.githubusercontent.com/os4-dev/infra-commons/main/scripts/install_iac_tools.sh](https://raw.githubusercontent.com/os4-dev/infra-commons/main/scripts/install_iac_tools.sh)
-    chmod +x install_iac_tools.sh
-    ```
-
-3.  **Execute the script:**
-    It's recommended to review scripts downloaded from the internet before executing them.
-    ```bash
-    # Run the main installer script
-    sudo bash ./install_iac_tools.sh
-    ```
-    *(Adjust the command if the script requires specific arguments)*
+For detailed information on each script, module, or role, including its purpose, architecture, parameters, and usage examples, please consult our comprehensive **[GitHub Wiki](https://github.com/os4-dev/infra-commons/wiki)**.
 
 ## Future Plans
 
 This repository is intended to grow. Future additions may include:
 
-- Reusable Ansible roles for common tasks (e.g., setting up users, configuring firewalls, installing software).
-- Reusable OpenTofu modules for creating infrastructure components (e.g., virtual machines, networks, storage).
-- Examples demonstrating how to use the roles and modules.
-- Linters (`shellcheck`, `ansible-lint`, `tflint`) and CI/CD integration for quality assurance.
+* More reusable Ansible roles for common server configurations.
+* Additional OpenTofu modules for various cloud and on-premise resources.
+* Examples demonstrating how to combine these components.
+* Integration of linters (`shellcheck`, `ansible-lint`, `tflint`) and CI/CD pipelines for quality assurance.
 
 ## Contributing
 
@@ -82,20 +48,8 @@ Contributions are welcome! If you have suggestions for improvements or want to a
 1.  Open an issue to discuss the proposed change.
 2.  Fork the repository, make your changes, and submit a pull request.
 
-Please ensure your contributions adhere to basic quality standards and include documentation where necessary.
+Please ensure your contributions adhere to basic quality standards and include comprehensive documentation, preferably by adding or updating pages in the GitHub Wiki.
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-&nbsp;&nbsp;&nbsp;&nbsp;[http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0)
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-The full text of the license can also be found in the [LICENSE](LICENSE) file in this repository.
+This project is licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for details.
