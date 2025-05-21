@@ -133,8 +133,8 @@ get_iso_storage_info() {
     fi
     local storage_info
     storage_info=$(pvesh get /storage --output-format json 2>/dev/null | \
-                   jq -r '.[] | select(.active == 1 and .type == "dir" and (.content | contains("iso"))) | "\(.storage):\(.path)"' | \
-                   head -n 1) # Select active storages only
+                 jq -r '.[] | select(.disable == null and .type == "dir" and (.content | contains("iso"))) | "\(.storage):\(.path)"' | \
+                 head -n 1) # Select active storages only
     if [ -n "$storage_info" ]; then
         found_id=$(echo "$storage_info" | cut -d':' -f1)
         found_path=$(echo "$storage_info" | cut -d':' -f2-)
@@ -148,19 +148,50 @@ get_iso_storage_info() {
 
 # --- UA: Функція для перевірки, чи сховище підтримує певний тип контенту ---
 # --- EN: Function to check if a storage supports a specific content type ---
+
+
 check_storage_content_type() {
     local storage_id="$1"
     local content_type_to_check="$2"
+
     if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
         log_warn "'pvesh' or 'jq' not available for storage content check." && return 1
     fi
-    # Check active status as well
-    if pvesh get /storage/"${storage_id}" --output-format json 2>/dev/null | jq -e ".active == 1 and (.content | contains(\"${content_type_to_check}\"))" > /dev/null; then
+
+    # Отримуємо інформацію про конкретне сховище
+    # Get information about the specific storage
+    local storage_json
+    storage_json=$(pvesh get /storage/"${storage_id}" --output-format json 2>/dev/null)
+
+    if [ -z "$storage_json" ]; then
+        log_warn "Could not retrieve information for storage '${storage_id}'." && return 1
+    fi
+
+    # Перевіряємо, що сховище активне (поле "disable" відсутнє або не 1) 
+    # Check that the storage is active (the "disable" field is absent or its value is not 1)
+    # та підтримує вказаний тип контенту.
+    # and supports the specified content type.
+    if echo "$storage_json" | jq -e "(.disable == null or .disable != 1) and (.content | contains(\"${content_type_to_check}\"))" > /dev/null; then
         log_info "Active storage '${storage_id}' supports '${content_type_to_check}' content type." && return 0
     else
         log_info "Storage '${storage_id}' is inactive or does NOT support '${content_type_to_check}' content type." && return 1
     fi
 }
+
+
+#check_storage_content_type() {
+#    local storage_id="$1"
+#    local content_type_to_check="$2"
+#    if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
+#        log_warn "'pvesh' or 'jq' not available for storage content check." && return 1
+#    fi
+#    # Check active status as well
+#    if pvesh get /storage/"${storage_id}" --output-format json 2>/dev/null | jq -e " .disable == null and (.content | contains(\"${content_type_to_check}\"))" > /dev/null; then
+#        log_info "Active storage '${storage_id}' supports '${content_type_to_check}' content type." && return 0
+#    else
+#        log_info "Storage '${storage_id}' is inactive or does NOT support '${content_type_to_check}' content type." && return 1
+#    fi
+#}
 
 # --- UA: Функція для встановлення деталей образу на основі кодової назви ---
 # --- EN: Function to set image details based on codename ---
@@ -774,38 +805,38 @@ main() {
     log_info "-----------------------------------------------------"
 
     # 0. Перевірка середовища та існуючого шаблону
-    check_environment
-    check_existing_template "${FINAL_TEMPLATE_NAME}"
+    #check_environment
+    #check_existing_template "${FINAL_TEMPLATE_NAME}"
 
     # 1. Крок 1: Завантаження образу та перевірка суми
-    download_image
+    #download_image
 
     # 2. Крок 2 та 2.1: Створення тимчасової ВМ та EFI диска
-    create_temp_vm
+    #create_temp_vm
 
     # 3. Крок 3: Імпорт диска
-    import_vm_disk
+    #import_vm_disk
 
     # 4. Крок 4: Налаштування ВМ
-    configure_vm_settings
+    #configure_vm_settings
 
     # 5. Крок 5: Автоматичне або ручне налаштування всередині ВМ
-    if [ "$FLAG_AUTO_SETUP" == "true" ]; then
-        automate_vm_setup_with_userdata
-    else
-        prompt_for_manual_steps
-    fi
+    #if [ "$FLAG_AUTO_SETUP" == "true" ]; then
+    #    automate_vm_setup_with_userdata
+    #else
+    #    prompt_for_manual_steps
+    #fi
 
     # 6. Крок 6: Перетворення на шаблон, додавання тегів та нотаток
-    convert_vm_to_template
+    #convert_vm_to_template
 
     # 7. Крок 7: Очищення
-    cleanup_temporary_files
+    #cleanup_temporary_files
 
-    log_info "-----------------------------------------------------"
-    log_success "Script finished successfully!"
-    log_success "Template '${FINAL_TEMPLATE_NAME}' (VMID ${TEMP_VM_ID}) should be ready in Proxmox."
-    log_info "-----------------------------------------------------"
+    #log_info "-----------------------------------------------------"
+    #log_success "Script finished successfully!"
+    #log_success "Template '${FINAL_TEMPLATE_NAME}' (VMID ${TEMP_VM_ID}) should be ready in Proxmox."
+    #log_info "-----------------------------------------------------"
 }
 
 # --- UA: Виклик головної функції ---
