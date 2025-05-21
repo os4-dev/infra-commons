@@ -124,25 +124,26 @@ show_help() {
 # --- UA: Функція для отримання інформації про сховище ISO (ID та шлях) ---
 # --- EN: Function to get ISO storage info (ID and path) ---
 get_iso_storage_info() {
-    local found_id=""
-    local found_path=""
-    log_info "Attempting to find a Proxmox storage suitable for ISO/image downloads..."
+    # EN: This function should now only output the "ID:PATH" string or empty string.
+    # EN: Logging about its actions will be handled by the caller.
     if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
-        log_warn "'pvesh' or 'jq' command not found. Cannot auto-detect ISO storage."
+        # UA: Важливо вивести це попередження в stderr, щоб не потрапило в результат
+        # EN: Important to output this warning to stderr to not be captured
+        log_warn "'pvesh' or 'jq' command not found. Cannot auto-detect ISO storage." >&2
         echo "" && return
     fi
     local storage_info
     storage_info=$(pvesh get /storage --output-format json 2>/dev/null | \
-                 jq -r '.[] | select(.disable == null and .type == "dir" and (.content | contains("iso"))) | "\(.storage):\(.path)"' | \
-                 head -n 1) # Select active storages only
+               jq -r '.[] | select(.disable == null and .type == "dir" and (.content | contains("iso"))) | "\(.storage):\(.path)"' | \
+               head -n 1) # Select active storages only (implicit by .disable == null)
+
     if [ -n "$storage_info" ]; then
-        found_id=$(echo "$storage_info" | cut -d':' -f1)
-        found_path=$(echo "$storage_info" | cut -d':' -f2-)
-        log_success "Found suitable active ISO storage: ID='${found_id}', Path='${found_path}'"
-        echo "${found_id}:${found_path}"
+        echo "$storage_info" # Повертаємо "ID:PATH"
     else
-        log_warn "No suitable 'dir' type storage with 'iso' content type found via pvesh."
-        echo ""
+        # UA: Це попередження також краще в stderr, якщо ми не хочемо його бачити в логах вищого рівня
+        # EN: This warning also better to stderr if we don't want it in higher level logs
+        log_warn "No suitable 'dir' type storage with 'iso' content type found via pvesh." >&2
+        echo "" # Повертаємо порожній рядок
     fi
 }
 
@@ -178,20 +179,6 @@ check_storage_content_type() {
     fi
 }
 
-
-#check_storage_content_type() {
-#    local storage_id="$1"
-#    local content_type_to_check="$2"
-#    if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
-#        log_warn "'pvesh' or 'jq' not available for storage content check." && return 1
-#    fi
-#    # Check active status as well
-#    if pvesh get /storage/"${storage_id}" --output-format json 2>/dev/null | jq -e " .disable == null and (.content | contains(\"${content_type_to_check}\"))" > /dev/null; then
-#        log_info "Active storage '${storage_id}' supports '${content_type_to_check}' content type." && return 0
-#    else
-#        log_info "Storage '${storage_id}' is inactive or does NOT support '${content_type_to_check}' content type." && return 1
-#    fi
-#}
 
 # --- UA: Функція для встановлення деталей образу на основі кодової назви ---
 # --- EN: Function to set image details based on codename ---
@@ -692,6 +679,77 @@ cleanup_temporary_files() {
     fi
 }
 
+# --- UA: Функція для фіналізації параметрів скрипту після розбору аргументів ---
+# --- EN: Function to finalize script parameters after argument parsing ---
+finalize_script_parameters() {
+    log_info "Finalizing script parameters..." # Це повідомлення з finalize_script_parameters
+
+    set_ubuntu_image_details "$UBUNTU_CODENAME" "$UBUNTU_ARCH"
+
+    local iso_info_raw
+    local detected_iso_storage_id=""
+    local detected_iso_storage_path=""
+
+    if [ -z "$DOWNLOAD_DIR_USER_SPECIFIED" ]; then
+        # UA: Лог перед викликом функції, що повертає значення
+        # EN: Log before calling the function that returns a value
+        log_info "Attempting to find a Proxmox storage suitable for ISO/image downloads..."
+        iso_info_raw=$(get_iso_storage_info) # Ця функція тепер має логувати в stderr
+
+        if [ -n "$iso_info_raw" ]; then
+            detected_iso_storage_id=$(echo "$iso_info_raw" | cut -d':' -f1)
+            detected_iso_storage_path=$(echo "$iso_info_raw" | cut -d':' -f2-) # cut -f2- для шляхів з ':'
+            DOWNLOAD_DIR="$detected_iso_storage_path"
+            # UA: Логуємо вже після отримання чистих значень
+            # EN: Log after getting clean values
+            log_success "Found suitable active ISO storage: ID='${detected_iso_storage_id}', Path='${DOWNLOAD_DIR}'"
+            log_info "Using auto-detected download directory: ${DOWNLOAD_DIR}"
+        else
+            # UA: get_iso_storage_info виведе своє попередження в stderr, якщо нічого не знайдено
+            # EN: get_iso_storage_info will output its warning to stderr if nothing found
+            DOWNLOAD_DIR="$DEFAULT_DOWNLOAD_DIR"
+            log_warn "Could not auto-detect ISO storage path. Using default download directory: ${DOWNLOAD_DIR}."
+        fi
+    else
+        log_info "User specified download directory: ${DOWNLOAD_DIR}"
+    fi
+
+    if [ -z "$PROXMOX_STORAGE_USER_SPECIFIED" ]; then
+        if [ -n "$detected_iso_storage_id" ]; then # Використовуємо чистий ID, отриманий вище
+            log_info "Checking if auto-detected ISO storage '${detected_iso_storage_id}' can also store VM images..."
+            if check_storage_content_type "${detected_iso_storage_id}" "images"; then
+                PROXMOX_STORAGE_ACTUAL="${detected_iso_storage_id}"
+                # UA: check_storage_content_type вже логує успіх/невдачу своєї перевірки
+                # EN: check_storage_content_type already logs the success/failure of its check
+                log_info "Using auto-detected ISO storage '${PROXMOX_STORAGE_ACTUAL}' for VM disks as it supports 'images' content."
+            else
+                PROXMOX_STORAGE_ACTUAL="${DEFAULT_PROXMOX_STORAGE}"
+                log_warn "Auto-detected ISO storage '${detected_iso_storage_id}' does not support 'images' content (or is inactive)."
+                log_warn "Falling back to default Proxmox storage for VM disks: ${PROXMOX_STORAGE_ACTUAL}."
+            fi
+        else
+            PROXMOX_STORAGE_ACTUAL="${DEFAULT_PROXMOX_STORAGE}"
+            log_warn "No specific ISO storage auto-detected for download. Using default Proxmox storage for VM disks: ${PROXMOX_STORAGE_ACTUAL}."
+        fi
+    else
+        log_info "User specified Proxmox storage for VM disks: ${PROXMOX_STORAGE_ACTUAL}"
+    fi
+
+    IMAGE_URL="${IMAGE_BASE_URL}/${IMAGE_PATH_SEGMENT}/${IMAGE_FILENAME}"
+    LOCAL_IMAGE_PATH="${DOWNLOAD_DIR}/${IMAGE_FILENAME}"
+
+    if [ -z "$FINAL_TEMPLATE_NAME" ]; then FINAL_TEMPLATE_NAME="${TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}-cloudinit"; fi
+    if [ -z "$PROXMOX_NODE" ]; then if command -v hostname &> /dev/null; then PROXMOX_NODE=$(hostname -f); else log_error "Proxmox node not specified (--node)." && exit 1; fi; fi
+    if [ -z "$TEMP_VM_ID" ]; then
+        local highest_vmid
+        highest_vmid=$( (qm list | awk 'NR>1 {print $1}' | sort -n | tail -n 1) || echo 0)
+        if [ "$highest_vmid" -lt 9000 ]; then TEMP_VM_ID="${VMID_PREFIX}01";
+        else TEMP_VM_ID=$((highest_vmid + 1)); fi
+        if [ "$TEMP_VM_ID" -lt 100 ]; then TEMP_VM_ID="${VMID_PREFIX}01"; fi
+        log_warn "Temporary VM ID not specified via --vmid. Auto-selected: ${TEMP_VM_ID}."
+    fi
+    log_info "Finalized script parameters successfully."
+}
 
 # --- UA: Ініціалізація та розбір аргументів ---
 # --- EN: Initialization and Argument Parsing ---
@@ -759,21 +817,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- UA: Встановлення решти змінних після розбору аргументів ---
-# --- EN: Set remaining variables after parsing arguments ---
-set_ubuntu_image_details "$UBUNTU_CODENAME" "$UBUNTU_ARCH"
-ISO_STORAGE_ID=""; ISO_STORAGE_PATH=""
-if [ -z "$DOWNLOAD_DIR_USER_SPECIFIED" ]; then
-    iso_info=$(get_iso_storage_info); if [ -n "$iso_info" ]; then ISO_STORAGE_ID=$(echo "$iso_info" | cut -d':' -f1); ISO_STORAGE_PATH=$(echo "$iso_info" | cut -d':' -f2-); DOWNLOAD_DIR="$ISO_STORAGE_PATH"; else DOWNLOAD_DIR="$DEFAULT_DOWNLOAD_DIR"; fi
-else :; fi
-if [ -z "$PROXMOX_STORAGE_USER_SPECIFIED" ]; then
-    if [ -n "$ISO_STORAGE_ID" ]; then if check_storage_content_type "${ISO_STORAGE_ID}" "images"; then PROXMOX_STORAGE_ACTUAL="${ISO_STORAGE_ID}"; else PROXMOX_STORAGE_ACTUAL="${DEFAULT_PROXMOX_STORAGE}"; fi
-    else PROXMOX_STORAGE_ACTUAL="${DEFAULT_PROXMOX_STORAGE}"; fi
-else :; fi
-IMAGE_URL="${IMAGE_BASE_URL}/${IMAGE_PATH_SEGMENT}/${IMAGE_FILENAME}"; LOCAL_IMAGE_PATH="${DOWNLOAD_DIR}/${IMAGE_FILENAME}"
-if [ -z "$FINAL_TEMPLATE_NAME" ]; then FINAL_TEMPLATE_NAME="${TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}-cloudinit"; fi
-if [ -z "$PROXMOX_NODE" ]; then if command -v hostname &> /dev/null; then PROXMOX_NODE=$(hostname -f); else log_error "Proxmox node not specified (--node)." && exit 1; fi; fi
-if [ -z "$TEMP_VM_ID" ]; then HIGHEST_VMID=$( (qm list | awk 'NR>1 {print $1}' | sort -n | tail -n 1) || echo 0); if [ "$HIGHEST_VMID" -lt 9000 ]; then TEMP_VM_ID="${VMID_PREFIX}01"; else TEMP_VM_ID=$((HIGHEST_VMID + 1)); fi; if [ "$TEMP_VM_ID" -lt 100 ]; then TEMP_VM_ID="${VMID_PREFIX}01"; fi; log_warn "Temporary VM ID not specified. Auto-selected: ${TEMP_VM_ID}. Use --vmid."; fi
+# --- UA: Викликаємо функцію для фіналізації параметрів ПІСЛЯ розбору аргументів ---
+# --- EN: Call the function to finalize parameters AFTER parsing arguments ---
+finalize_script_parameters
 
 
 # --- UA: Головна функція ---
