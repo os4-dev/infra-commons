@@ -203,7 +203,7 @@ set_ubuntu_image_details() {
 # --- UA: Функція для створення тимчасової ВМ з EFI диском (з опцією очищення та перевіркою маркера) ---
 # --- EN: Function to create the temporary VM with EFI disk (with cleanup option and marker check) ---
 create_temp_vm() {
-    log_info "Step 2: Checking for existing VM/Template with ID ${TEMP_VM_ID}..."
+    log_info "Step 2: Checking for existing VM/Template with ID ${TEMP_VM_ID} on node ${PROXMOX_NODE}..." # Можна залишити логування вузла для інформації
     local vm_exists="false"
     local is_template="false"
     local existing_desc=""
@@ -221,15 +221,15 @@ create_temp_vm() {
 
     if [ "$vm_exists" == "true" ]; then
         if [ "$is_template" == "true" ]; then
-            log_error "A template (ID: ${TEMP_VM_ID}) already exists. Cannot proceed."
+            log_error "A template (ID: ${TEMP_VM_ID}) already exists on node ${PROXMOX_NODE}. Cannot proceed."
             exit 1
         else # It's an existing VM
-            log_warn "Existing VM (ID: ${TEMP_VM_ID}) found."
+            log_warn "Existing VM (ID: ${TEMP_VM_ID}) found on node ${PROXMOX_NODE}."
             if [ "$FLAG_FORCE_CLEANUP_VM" == "true" ]; then
                 log_info "Flag --force-cleanup-vm is set. Checking VM description for script marker..."
                 if echo "${existing_desc}" | grep -q -F "${SCRIPT_MARKER}"; then
                     log_warn "Marker '${SCRIPT_MARKER}' found in description. Proceeding with automatic cleanup."
-                    log_warn "Attempting to stop and destroy the existing VM ${TEMP_VM_ID}..."
+                    log_warn "Attempting to stop and destroy the existing VM ${TEMP_VM_ID} on node ${PROXMOX_NODE}..."
                     qm stop "${TEMP_VM_ID}" --timeout 60 || log_warn "Could not stop VM ${TEMP_VM_ID}. Continuing with destroy."
                     if qm destroy "${TEMP_VM_ID}" --purge --destroy-unreferenced-disks 1; then
                         log_success "Existing VM ${TEMP_VM_ID} destroyed successfully."
@@ -239,14 +239,12 @@ create_temp_vm() {
                     fi
                 else # Marker not found
                     log_error "Script marker not found in the description of existing VM ${TEMP_VM_ID}."
-                    log_error "Automatic cleanup (--force-cleanup-vm) aborted for safety."
-                    log_error "Please remove the VM manually or use --vmid for a different ID if you are sure."
+                    # ... (решта повідомлень про помилку)
                     exit 1
                 fi
             else # Cleanup flag not set
-                log_error "VM with ID ${TEMP_VM_ID} already exists."
-                log_error "Use --force-cleanup-vm flag to attempt automatic deletion (only if VM has script marker in description)"
-                log_error "or use --vmid to choose a different ID."
+                log_error "VM with ID ${TEMP_VM_ID} already exists on node ${PROXMOX_NODE}."
+                # ... (решта повідомлень про помилку)
                 exit 1
             fi
         fi
@@ -254,10 +252,10 @@ create_temp_vm() {
 
     # --- UA: Створення нової ВМ ---
     # --- EN: Create the new VM ---
-    log_info "Proceeding to create temporary VM (ID: ${TEMP_VM_ID})..."
+    log_info "Proceeding to create temporary VM (ID: ${TEMP_VM_ID}) on current node (expected: ${PROXMOX_NODE})..."
     log_info "Executing: qm create ${TEMP_VM_ID} --name temp-${FINAL_TEMPLATE_NAME} ..."
     if qm create "${TEMP_VM_ID}" \
-        --name "temp-${FINAL_TEMPLATE_NAME}" --ostype l26 --node "${PROXMOX_NODE}" \
+        --name "temp-${FINAL_TEMPLATE_NAME}" --ostype l26 \
         --cores "${VM_CORES}" --memory "${VM_MEMORY}" --net0 virtio,bridge="${VM_BRIDGE}" \
         --machine q35 --bios ovmf --scsihw virtio-scsi-pci --agent enabled=1; then
         log_success "Temporary VM ${TEMP_VM_ID} created successfully."
@@ -267,6 +265,7 @@ create_temp_vm() {
 
     # --- UA: Додавання маркера скрипту в нотатки ВМ ---
     # --- EN: Add script marker to VM notes ---
+
     local vm_creation_notes
     vm_creation_notes=$(printf "%s\nIntended-template: %s\nTimestamp: %s" \
                         "${SCRIPT_MARKER}" \
@@ -281,9 +280,9 @@ create_temp_vm() {
 
     # --- UA: Додавання EFI диска ---
     # --- EN: Add EFI disk ---
-    log_info "Step 2.1: Adding EFI disk to VM ${TEMP_VM_ID}..."
-     if qm set "${TEMP_VM_ID}" \
-        --efidisk0 "${PROXMOX_STORAGE_ACTUAL}":4M,efitype=4m,pre-enrolled-keys=1,format=raw; then
+    log_info "Sitep 2.1: Adding EFI disk to VM ${TEMP_VM_ID} on storage ${PROXMOX_STORAGE_ACTUAL}..."
+    if qm set "${TEMP_VM_ID}" \
+        --efidisk0 "${PROXMOX_STORAGE_ACTUAL}":0,efitype=4m,pre-enrolled-keys=1,format=raw; then 
         log_success "EFI disk added successfully to VM ${TEMP_VM_ID} on storage ${PROXMOX_STORAGE_ACTUAL}."
     else
         log_error "Failed to add EFI disk to VM ${TEMP_VM_ID}."
@@ -291,7 +290,7 @@ create_temp_vm() {
         qm destroy "${TEMP_VM_ID}" --purge --destroy-unreferenced-disks 1 || log_warn "Could not automatically destroy VM ${TEMP_VM_ID}."
         exit 1
     fi
-}
+    }
 
 # --- UA: Функція для перевірки середовища та необхідних утиліт ---
 # --- EN: Function to check environment and required utilities ---
@@ -311,6 +310,24 @@ check_environment() {
     fi
     log_success "All required base utilities are present."
     # Add check for qm permissions? Maybe check if user is root or in appropriate group?
+}
+
+# --- UA: Функція для перевірки існуючого шаблону ---
+# --- EN: Function to check for existing template ---
+check_existing_template() {
+    local template_name_to_check="$1"
+    log_info "Checking if a template named '${template_name_to_check}' already exists..."
+    if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
+        log_warn "'pvesh' or 'jq' not found. Cannot check for existing template." && return
+    fi
+    if pvesh get /cluster/resources --type vm --output-format json 2>/dev/null | \
+       jq -e --arg name "$template_name_to_check" '.[] | select(.template==1 and .name==$name)' > /dev/null; then
+        log_error "A template named '${template_name_to_check}' already exists."
+        log_error "Please remove it manually or choose a different name (--template-name)."
+        exit 1
+    else
+        log_success "No existing template found with name '${template_name_to_check}'. Proceeding..."
+    fi
 }
 
 # --- UA: Функція для завантаження образу та перевірки контрольної суми ---
@@ -400,23 +417,113 @@ import_vm_disk() {
 # --- EN: Function for final VM configuration ---
 configure_vm_settings() {
     log_info "Step 4: Configuring VM ${TEMP_VM_ID} settings..."
-    local imported_disk_volume="${PROXMOX_STORAGE_ACTUAL}:vm-${TEMP_VM_ID}-disk-0"
-    log_info "Attaching imported disk (${imported_disk_volume}) as scsi0..."
-    if qm set "${TEMP_VM_ID}" --scsi0 "${imported_disk_volume}"; then
-        log_success "Imported disk attached successfully as scsi0."
+
+    local full_volume_id_for_unused0
+    local disk_config_line
+    local disk_path_on_host # UA: Шлях до файлу образу на хості / EN: Path to the image file on the host
+
+    log_info "Retrieving full volume ID for the imported disk (registered as unused0)..."
+    if ! command -v pvesh &> /dev/null || ! command -v jq &> /dev/null; then
+        log_warn "'pvesh' or 'jq' not found. Using 'qm config' as fallback for unused disk volume ID." >&2
+        disk_config_line=$(qm config "${TEMP_VM_ID}" --current 2>/dev/null | grep '^unused0:')
+        if [ -z "$disk_config_line" ]; then
+            log_error "Could not find unused0 disk in VM ${TEMP_VM_ID} configuration after import via 'qm config'."
+            exit 1
+        fi
+        full_volume_id_for_unused0=$(echo "$disk_config_line" | sed -e 's/^unused0:[[:space:]]*//' -e 's/,[^,]*$//')
     else
-        log_error "Failed to attach imported disk ${imported_disk_volume} as scsi0."
+        full_volume_id_for_unused0=$(pvesh get /nodes/"${PROXMOX_NODE}"/qemu/"${TEMP_VM_ID}"/config --output-format json 2>/dev/null | jq -r '.unused0 | select(type == "string") | sub(",size=[0-9]+[KMGT]?"; "")' || echo "")
+    fi
+
+    if [ -z "$full_volume_id_for_unused0" ] || [ "$full_volume_id_for_unused0" == "null" ]; then
+        log_error "Could not parse the full volume ID for unused0 for VM ${TEMP_VM_ID}."
+        log_info "Current VM config dump:"
+        qm config "${TEMP_VM_ID}" --current || true
+        exit 1
+    fi
+    log_success "Successfully retrieved full volume ID for imported disk (unused0): ${full_volume_id_for_unused0}"
+
+    # UA: Отримуємо шлях до файлу образу на хості зі сховища типу 'dir'
+    # EN: Get the path to the image file on the host from 'dir' type storage
+    local storage_id_from_volume
+    local relative_path_from_volume
+    storage_id_from_volume=$(echo "$full_volume_id_for_unused0" | cut -d':' -f1)
+    relative_path_from_volume=$(echo "$full_volume_id_for_unused0" | cut -d':' -f2-)
+
+    # UA: Отримуємо фізичний шлях до сховища
+    # EN: Get the physical path of the storage
+    # UA: Це припускає, що PROXMOX_STORAGE_ACTUAL - це ID, а не шлях
+    # EN: This assumes PROXMOX_STORAGE_ACTUAL is an ID, not a path
+    local storage_base_path
+    storage_base_path=$(pvesh get /storage/"${PROXMOX_STORAGE_ACTUAL}" --output-format json 2>/dev/null | jq -r '.path // empty' || echo "")
+
+    if [ -z "$storage_base_path" ]; then
+        log_error "Could not determine base path for storage '${PROXMOX_STORAGE_ACTUAL}'. Cannot construct full disk path for qemu-img resize."
+        exit 1
+    fi
+    disk_path_on_host="${storage_base_path}/images/${relative_path_from_volume}" # Proxmox stores VM images in an 'images' subdirectory for 'dir' storage
+
+    log_info "Constructed disk path on host: ${disk_path_on_host}"
+
+    # --- UA: Зміна розміру образу диска за допомогою qemu-img ---
+    # --- EN: Resize disk image using qemu-img ---
+    log_info "Resizing disk image ${disk_path_on_host} to ${VM_DISK_SIZE} using qemu-img..."
+    if /usr/bin/qemu-img resize -f raw "${disk_path_on_host}" "${VM_DISK_SIZE}"; then
+        log_success "Disk image resized successfully using qemu-img."
+    else
+        log_error "Failed to resize disk image using qemu-img for VM ${TEMP_VM_ID}."
+        # UA: Можливо, не варто виходити, якщо qm rescan потім спрацює, але це ризиковано
+        # EN: Might not exit if qm rescan works later, but it's risky
         exit 1
     fi
 
-    log_info "Resizing disk scsi0 to ${VM_DISK_SIZE}..."
-    if qm resize "${TEMP_VM_ID}" scsi0 "${VM_DISK_SIZE}"; then
-        log_success "Disk scsi0 resized successfully to ${VM_DISK_SIZE}."
+    # --- UA: Підключення імпортованого диска ---
+    # --- EN: Attach the imported disk ---
+    log_info "Attaching imported disk (${full_volume_id_for_unused0}) as scsi0..."
+    if qm set "${TEMP_VM_ID}" --scsi0 "${full_volume_id_for_unused0}"; then
+        log_success "Imported disk attached successfully as scsi0."
     else
-        log_error "Failed to resize disk scsi0 for VM ${TEMP_VM_ID}."
-        # Non-fatal, but log error
+        log_error "Failed to attach imported disk ${full_volume_id_for_unused0} as scsi0."
+        exit 1
     fi
 
+    # --- UA: Пересканування дисків ВМ, щоб Proxmox побачив новий розмір ---
+    # --- EN: Rescan VM disks for Proxmox to see the new size ---
+    log_info "Rescanning disks for VM ${TEMP_VM_ID} to update size in config..."
+    if qm disk rescan --vmid "${TEMP_VM_ID}"; then
+        log_success "Disks rescanned successfully for VM ${TEMP_VM_ID}."
+        # UA: Затримка, щоб переконатися, що конфігурація оновилася перед наступними командами
+        # EN: Delay to ensure config is updated before next commands
+        sleep 3
+        # UA: Перевіряємо, чи оновився розмір у конфігурації
+        # EN: Verify if the size in config was updated
+        local current_disk_size_in_config
+        current_disk_size_in_config=$(qm config "${TEMP_VM_ID}" --current 2>/dev/null | grep "^scsi0:" | sed -e 's/.*,size=\([0-9]\+[KMGT]\+\).*/\1/' || echo "N/A")
+        log_info "Disk scsi0 size in Proxmox config after rescan: ${current_disk_size_in_config}"
+        if [[ "$current_disk_size_in_config" == *"${VM_DISK_SIZE}"* ]]; then
+            log_success "Proxmox config updated with new disk size ${VM_DISK_SIZE}."
+        else
+            log_warn "Proxmox config might not reflect the new disk size ${VM_DISK_SIZE} immediately. Expected: ${VM_DISK_SIZE}, Got: ${current_disk_size_in_config}."
+            log_warn "Attempting to use 'qm resize' as a fallback to ensure config update..."
+            if qm resize "${TEMP_VM_ID}" scsi0 "${VM_DISK_SIZE}"; then
+                log_success "Fallback 'qm resize' successful, config should be updated."
+            else
+                log_error "Fallback 'qm resize' also failed. Disk size in config might be incorrect."
+            fi
+        fi
+    else
+        log_error "Failed to rescan disks for VM ${TEMP_VM_ID}. The disk size in Proxmox config might be incorrect."
+        log_warn "Attempting 'qm resize' as a fallback..."
+        if qm resize "${TEMP_VM_ID}" scsi0 "${VM_DISK_SIZE}"; then
+             log_success "Fallback 'qm resize' successful."
+        else
+             log_error "Fallback 'qm resize' also failed. Disk size in config is likely incorrect."
+        fi
+    fi
+
+
+    # UA: Додаємо пристрій CloudInit (зазвичай як IDE)
+    # EN: Add CloudInit drive (usually as IDE)
     log_info "Adding CloudInit drive..."
     if qm set "${TEMP_VM_ID}" --ide2 "${PROXMOX_STORAGE_ACTUAL}:cloudinit"; then
         log_success "CloudInit drive added successfully."
@@ -425,6 +532,8 @@ configure_vm_settings() {
         exit 1
     fi
 
+    # UA: Встановлюємо порядок завантаження, щоб ВМ завантажувалася з імпортованого диска
+    # EN: Set the boot order to boot from the imported disk
     log_info "Setting boot order to scsi0..."
     if qm set "${TEMP_VM_ID}" --boot order=scsi0; then
         log_success "Boot order set successfully to scsi0."
@@ -433,6 +542,8 @@ configure_vm_settings() {
         exit 1
     fi
 
+    # UA: Налаштовуємо послідовну консоль (рекомендовано для cloud-init образів)
+    # EN: Configure serial console (recommended for cloud-init images)
     log_info "Configuring serial console (serial0)..."
     if qm set "${TEMP_VM_ID}" --serial0 socket --vga serial0; then
         log_success "Serial console configured successfully."
@@ -851,20 +962,20 @@ main() {
     log_info "-----------------------------------------------------"
 
     # 0. Перевірка середовища та існуючого шаблону
-    #check_environment
-    #check_existing_template "${FINAL_TEMPLATE_NAME}"
+    check_environment
+    check_existing_template "${FINAL_TEMPLATE_NAME}"
 
     # 1. Крок 1: Завантаження образу та перевірка суми
-    #download_image
+    download_image
 
     # 2. Крок 2 та 2.1: Створення тимчасової ВМ та EFI диска
-    #create_temp_vm
+    create_temp_vm
 
     # 3. Крок 3: Імпорт диска
-    #import_vm_disk
+    import_vm_disk
 
     # 4. Крок 4: Налаштування ВМ
-    #configure_vm_settings
+    configure_vm_settings
 
     # 5. Крок 5: Автоматичне або ручне налаштування всередині ВМ
     #if [ "$FLAG_AUTO_SETUP" == "true" ]; then
