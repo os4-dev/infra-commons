@@ -978,11 +978,11 @@ main() {
     configure_vm_settings
 
     # 5. Крок 5: Автоматичне або ручне налаштування всередині ВМ
-    #if [ "$FLAG_AUTO_SETUP" == "true" ]; then
-    #    automate_vm_setup_with_userdata
-    #else
-    #    prompt_for_manual_steps
-    #fi
+    if [ "$FLAG_AUTO_SETUP" == "true" ]; then
+        automate_vm_setup_with_userdata
+    else
+        prompt_for_manual_steps
+    fi
 
     # 6. Крок 6: Перетворення на шаблон, додавання тегів та нотаток
     #convert_vm_to_template
