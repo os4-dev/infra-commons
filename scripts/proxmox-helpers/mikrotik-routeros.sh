@@ -801,7 +801,8 @@ create_and_configure_vm() {
         nfs|dir) 
             disk_ext=".qcow2"
             disk_ref_path_segment="$VMID/" 
-            disk_import_format_option="-format qcow2"
+            #disk_import_format_option="-format qcow2"
+            disk_import_format_option=""
             ;;
         btrfs) 
             disk_ext=".raw"
