@@ -73,7 +73,7 @@ show_help() {
     echo "  --user USERNAME             Admin username to create (default: ${DEFAULT_USER})."
     echo "  --ssh-key-file FILE_PATH    Path to SSH public key file (default: ${DEFAULT_SSH_PUB_KEY_FILE})."
     echo "  --vmid ID                   VM ID for the temporary VM (default: auto-generated)."
-    echo "  --template-name NAME        Base name for the final template (default: ubuntu-<codename>)."
+    echo "  --template-name NAME        Base name for the final template (default: ubuntu-<codename>-cloud)."
     echo "  --tags TAGS                 Comma-separated list of custom tags to add to the template."
     echo "  --force-download            Force download of the latest image, ignoring local versions."
 }
@@ -260,7 +260,7 @@ finalize_settings() {
             TEMP_VM_ID=$(whiptail --backtitle "$backtitle_text" --inputbox "Set Temporary Virtual Machine ID" 10 60 "$(get_valid_nextid "$DEFAULT_VMID_PREFIX")" --title "Temporary VM ID" 3>&1 1>&2 2>&3) || exit 1
         fi
         if [[ -z "$FINAL_TEMPLATE_NAME" ]]; then
-            FINAL_TEMPLATE_NAME=$(whiptail --backtitle "$backtitle_text" --inputbox "Set the final template name" 10 60 "${DEFAULT_TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}" --title "Template Name" 3>&1 1>&2 2>&3) || exit 1
+            FINAL_TEMPLATE_NAME=$(whiptail --backtitle "$backtitle_text" --inputbox "Set the final template name" 10 60 "${DEFAULT_TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}-cloud" --title "Template Name" 3>&1 1>&2 2>&3) || exit 1
         fi
         if [[ -z "$VM_CORES" ]]; then
             VM_CORES=$(whiptail --backtitle "$backtitle_text" --inputbox "Allocate CPU Cores" 10 60 "$DEFAULT_VM_CORES" --title "CPU Cores" 3>&1 1>&2 2>&3) || exit 1
@@ -282,7 +282,7 @@ finalize_settings() {
     if [[ -z "$UBUNTU_CODENAME" ]]; then UBUNTU_CODENAME="$DEFAULT_UBUNTU_CODENAME"; fi
     if [[ -z "$SSH_PUB_KEY_FILE" ]]; then SSH_PUB_KEY_FILE="$DEFAULT_SSH_PUB_KEY_FILE"; fi
     if [[ -z "$TEMP_VM_ID" ]]; then TEMP_VM_ID=$(get_valid_nextid "$DEFAULT_VMID_PREFIX"); fi
-    if [[ -z "$FINAL_TEMPLATE_NAME" ]]; then FINAL_TEMPLATE_NAME="${DEFAULT_TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}"; fi
+    if [[ -z "$FINAL_TEMPLATE_NAME" ]]; then FINAL_TEMPLATE_NAME="${DEFAULT_TEMPLATE_NAME_PREFIX}-${UBUNTU_CODENAME}-cloud"; fi
     if [[ -z "$VM_CORES" ]]; then VM_CORES="$DEFAULT_VM_CORES"; fi
     if [[ -z "$VM_MEMORY" ]]; then VM_MEMORY="$DEFAULT_VM_MEMORY"; fi
     if [[ -z "$VM_DISK_SIZE" ]]; then VM_DISK_SIZE="$DEFAULT_VM_DISK_SIZE"; fi
@@ -470,10 +470,131 @@ import_and_configure_disk() {
     qm set "${TEMP_VM_ID}" --serial0 socket --vga serial0
 }
 
-# --- UA: Фінальна функція для автоматичного налаштування ВМ ---
-# --- EN: Final function for automated VM setup ---
+# --- UA: Функція для автоматичного налаштування ВМ та очищення артефактів ---
+# --- EN: Function for automated VM setup and artifact cleanup ---
+
 automate_vm_setup_with_userdata() {
-    # ... (код функції без змін)
+    # --- UA: Підготовка тимчасових файлів ---
+    # --- EN: Preparing temporary files ---
+    local temp_dir user_data_file network_config_file
+    # UA: Створюємо тимчасову директорію для безпечного зберігання конфігураційних файлів.
+    # EN: Create a temporary directory to safely store configuration files.
+    temp_dir=$(mktemp -d)
+    user_data_file="${temp_dir}/user-data.yaml"
+    network_config_file="${temp_dir}/network-config.yaml"
+    
+    log_info "Fetching SSH key..."
+    local ADMIN_SSH_KEY
+    # UA: Зчитуємо вміст публічного SSH-ключа з файлу, вказаного користувачем.
+    # EN: Read the content of the public SSH key from the user-specified file.
+    ADMIN_SSH_KEY=$(cat "${SSH_PUB_KEY_FILE}")
+    log_success "SSH key loaded."
+
+    log_info "Creating user-data and network-config files..."
+    
+    # --- UA: Генерація user-data.yaml ---
+    # --- EN: Generating user-data.yaml ---
+    cat << EOF > "$user_data_file"
+#cloud-config
+users:
+  - name: ${VM_USER}
+    default: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [sudo, adm]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ADMIN_SSH_KEY}
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ rm, -f, /etc/ssh/ssh_host_* ]
+  - [ truncate, -s, 0, /etc/machine-id ]
+  - [ ln, -sf, /var/lib/dbus/machine-id, /etc/machine-id ]
+  - [ cloud-init, clean, --logs, --seed ]
+  - [ poweroff, -f ]
+EOF
+
+    # --- UA: Генерація універсального network-config.yaml ---
+    # --- EN: Generating a universal network-config.yaml ---
+    cat << EOF > "$network_config_file"
+network:
+  version: 2
+  ethernets:
+    main:
+      match:
+        name: "en*"
+      dhcp4: true
+      mtu: 1450
+EOF
+    
+    # --- UA: Копіювання конфігурацій у сховище сніпетів Proxmox ---
+    # --- EN: Copying configurations to the Proxmox snippets storage ---
+    local storage_base_path snippet_dir_path user_data_filename network_config_filename
+    storage_base_path=$(get_storage_path "$SNIPPETS_STORAGE")
+    snippet_dir_path="${storage_base_path}/snippets"
+    mkdir -p "$snippet_dir_path"
+    user_data_filename="user-data-${TEMP_VM_ID}.yaml"
+    network_config_filename="network-config-${TEMP_VM_ID}.yaml"
+    cp "$user_data_file" "${snippet_dir_path}/${user_data_filename}"
+    cp "$network_config_file" "${snippet_dir_path}/${network_config_filename}"
+    rm -rf "$temp_dir"
+
+    local user_data_volume="${SNIPPETS_STORAGE}:snippets/${user_data_filename}"
+    local network_config_volume="${SNIPPETS_STORAGE}:snippets/${network_config_filename}"
+
+    # --- UA: Запуск та очікування завершення роботи ВМ ---
+    # --- EN: Starting and waiting for the VM to complete its work ---
+    log_info "Attaching cloud-init snippets and starting VM..."
+    qm set "${TEMP_VM_ID}" --cicustom "user=${user_data_volume},network=${network_config_volume}"
+    qm start "${TEMP_VM_ID}"
+
+    log_info "Waiting for VM to provision and shut down (timeout: 20 minutes)..."
+    local wait_timeout=1200 elapsed_time=0
+    while [ "$elapsed_time" -lt "$wait_timeout" ]; do
+        local vm_status
+        vm_status=$(qm status "${TEMP_VM_ID}" 2>/dev/null | awk '{print $2}' || echo "unknown")
+        
+        if [ "$vm_status" == "stopped" ]; then
+            log_success "\nVM ${TEMP_VM_ID} has shut down."
+            
+            # --- UA: Очищення всіх артефактів cloud-init ---
+            # --- EN: Cleaning up all cloud-init artifacts ---
+            log_info "Cleaning up cloud-init artifacts from VM config..."
+            # UA: Видаляємо тимчасові файли сніпетів зі сховища.
+            # EN: Remove temporary snippet files from storage.
+            rm -f "${snippet_dir_path}/${user_data_filename}" || log_warn "Could not remove user-data snippet."
+            rm -f "${snippet_dir_path}/${network_config_filename}" || log_warn "Could not remove network-config snippet."
+            
+            # UA: Видаляємо посилання на сніпети з конфігурації ВМ.
+            # EN: Remove references to snippets from the VM configuration.
+            if qm set "${TEMP_VM_ID}" --delete cicustom; then
+                log_success "Cloud-init settings (cicustom) removed."
+            else
+                log_warn "Could not remove cicustom settings."
+            fi
+            # UA: Видаляємо віртуальний CD-ROM, який використовувався для cloud-init.
+            # EN: Remove the virtual CD-ROM drive that was used for cloud-init.
+            if qm set "${TEMP_VM_ID}" --delete ide2; then
+                log_success "Cloud-init drive (ide2) removed."
+            else
+                log_warn "Could not remove cloud-init drive."
+            fi
+            
+            return 0
+        fi
+        
+        elapsed_time=$((elapsed_time + 15))
+        printf "\r[INFO] Waiting... (${elapsed_time}s / ${wait_timeout}s) Current status: ${vm_status}"
+        sleep 15
+    done
+    
+    echo ""
+    log_error "VM did not shut down within the timeout."
+    exit 1
 }
 
 # --- UA: Функція перетворення на шаблон ---
@@ -523,7 +644,7 @@ main() {
     log_info "Execution Summary:"
     log_info "  - Admin User:           ${VM_USER}"
     log_info "  - SSH Key File:         ${SSH_PUB_KEY_FILE}"
-    log_info "  - Temporary VM ID:        ${TEMP_VM_ID}"
+    log_info "  - Temporary VM ID:      ${TEMP_VM_ID}"
     log_info "  - Base Template Name:   ${FINAL_TEMPLATE_NAME}"
     log_info "  - Custom Tags:          ${USER_TAGS:- (none)}"
     log_info "  - VM Disk Storage:      ${DISK_STORAGE} (Path: ${disk_storage_path:-N/A for block storage})"
